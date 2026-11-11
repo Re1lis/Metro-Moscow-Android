@@ -1,6 +1,10 @@
 package com.re1lis.metromoscow
 
+import android.Manifest
+import android.annotation.SuppressLint
+import android.content.Context
 import android.app.DatePickerDialog
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -28,6 +32,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.fontResource
@@ -43,12 +48,15 @@ import com.re1lis.metromoscow.data.*
 import com.re1lis.metromoscow.ui.theme.AccentColors
 import com.re1lis.metromoscow.ui.theme.MetroRed
 import com.re1lis.metromoscow.ui.theme.MetroTheme
+import com.re1lis.metromoscow.worker.ReminderWorker
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import kotlin.math.roundToInt
 
-private enum class MainTab(val title: String) { METRO("Метро"), STATS("Статистика"), TRAINS("Поезда"), SETTINGS("Настройки") }
+private enum class MainTab(val title: String) { METRO("Метро"), HISTORY("История"), STATS("Статистика"), TRAINS("Поезда"), SETTINGS("Настройки") }
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -56,6 +64,26 @@ class MainActivity : ComponentActivity() {
         setContent {
             val viewModel: MetroViewModel = viewModel()
             val state by viewModel.state.collectAsStateWithLifecycle()
+
+            // Request POST_NOTIFICATIONS on Android 13+
+            val notifLauncher = rememberLauncherForActivityResult(
+                ActivityResultContracts.RequestPermission()
+            ) { /* result handled silently */ }
+            LaunchedEffect(Unit) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    notifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                }
+            }
+
+            // Schedule weekly reminder if enabled
+            LaunchedEffect(state.settings.weeklyReminder) {
+                if (state.settings.weeklyReminder) {
+                    ReminderWorker.schedule(applicationContext)
+                } else {
+                    ReminderWorker.cancel(applicationContext)
+                }
+            }
+
             MetroTheme(state.settings) {
                 MetroMoscowApp(state, viewModel)
             }
@@ -71,7 +99,7 @@ private fun MetroMoscowApp(state: MetroUiState, vm: MetroViewModel) {
     var activeStation by remember { mutableStateOf<Station?>(null) }
     val snackbar = remember { SnackbarHostState() }
 
-    LaunchedEffect(Unit) { delay(1050); splash = false }
+    LaunchedEffect(Unit) { delay(3500); splash = false }
     LaunchedEffect(state.message) {
         state.message?.let { snackbar.showSnackbar(it); vm.dismissMessage() }
     }
@@ -105,7 +133,14 @@ private fun MetroMoscowApp(state: MetroUiState, vm: MetroViewModel) {
         ) { padding ->
             Box(Modifier.padding(padding)) {
                 when (tab) {
-                    MainTab.METRO -> HomeScreen(state, vm::setSearch, vm::setFilter) { activeLine = it }
+                    MainTab.METRO -> HomeScreen(
+                        state = state,
+                        onSearch = vm::setSearch,
+                        onFilter = vm::setFilter,
+                        onLine = { activeLine = it },
+                        onStationSelect = { st, line -> activeLine = line; activeStation = st }
+                    )
+                    MainTab.HISTORY -> HistoryScreen(state) { st, line -> activeLine = line; activeStation = st }
                     MainTab.STATS -> StatisticsScreen(state) { line -> tab = MainTab.METRO; activeLine = line }
                     MainTab.TRAINS -> TrainsScreen()
                     MainTab.SETTINGS -> SettingsScreen(state, vm)
@@ -117,21 +152,49 @@ private fun MetroMoscowApp(state: MetroUiState, vm: MetroViewModel) {
 
 @Composable
 private fun SplashScreen() {
+    val scale = remember { androidx.compose.animation.core.Animatable(0.5f) }
+    val alpha = remember { androidx.compose.animation.core.Animatable(0f) }
+
+    LaunchedEffect(Unit) {
+        scale.animateTo(
+            targetValue = 1f,
+            animationSpec = androidx.compose.animation.core.spring(
+                dampingRatio = androidx.compose.animation.core.Spring.DampingRatioMediumBouncy,
+                stiffness = androidx.compose.animation.core.Spring.StiffnessLow
+            )
+        )
+    }
+    LaunchedEffect(Unit) {
+        alpha.animateTo(
+            targetValue = 1f,
+            animationSpec = androidx.compose.animation.core.tween(durationMillis = 800)
+        )
+    }
+
     Box(
         Modifier.fillMaxSize().background(
             Brush.linearGradient(listOf(Color(0xFF870F14), MetroRed, Color(0xFFEF5350)))
         ),
         contentAlignment = Alignment.Center
     ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(18.dp)) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(18.dp),
+            modifier = Modifier.graphicsLayer(alpha = alpha.value)
+        ) {
             Box(
-                Modifier.size(126.dp).shadow(24.dp, CircleShape).background(Color.White, CircleShape),
+                Modifier
+                    .size(126.dp)
+                    .graphicsLayer(scaleX = scale.value, scaleY = scale.value)
+                    .shadow(24.dp, CircleShape)
+                    .background(Color.White, CircleShape),
                 contentAlignment = Alignment.Center
             ) {
                 Text("М", color = MetroRed, fontSize = 76.sp, fontWeight = FontWeight.Black)
             }
-            Text("МЕТРО МОСКВЫ", color = Color.White, fontSize = 27.sp, fontWeight = FontWeight.Black)
+            Text("МЕТРО МОСКВЫ", color = Color.White, fontSize = 27.sp, fontWeight = FontWeight.Black, letterSpacing = 2.sp)
             Text("Открывай город станция за станцией", color = Color.White.copy(alpha = .78f), fontSize = 15.sp)
+            Spacer(Modifier.height(8.dp))
             LinearProgressIndicator(
                 modifier = Modifier.width(180.dp).clip(CircleShape),
                 color = Color.White,
@@ -147,6 +210,7 @@ private fun MetroBottomBar(selected: MainTab, onSelect: (MainTab) -> Unit) {
         MainTab.entries.forEach { tab ->
             val icon = when (tab) {
                 MainTab.METRO -> Icons.Default.Subway
+                MainTab.HISTORY -> Icons.Default.History
                 MainTab.STATS -> Icons.Default.BarChart
                 MainTab.TRAINS -> Icons.Default.Train
                 MainTab.SETTINGS -> Icons.Default.Settings
@@ -161,17 +225,103 @@ private fun MetroBottomBar(selected: MainTab, onSelect: (MainTab) -> Unit) {
     }
 }
 
+@SuppressLint("MissingPermission")
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun HomeScreen(
     state: MetroUiState,
     onSearch: (String) -> Unit,
     onFilter: (StationFilter) -> Unit,
-    onLine: (MetroLine) -> Unit
+    onLine: (MetroLine) -> Unit,
+    onStationSelect: (Station, MetroLine) -> Unit
 ) {
+    val context = LocalContext.current
+    var isSearching by remember { mutableStateOf(false) }
+    var isFindingNearest by remember { mutableStateOf(false) }
+    var nearestModalStation by remember { mutableStateOf<Pair<Station, MetroLine>?>(null) }
+    var showNearestDialog by remember { mutableStateOf(false) }
+    var nearestErrorMsg by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+
+    LaunchedEffect(state.search) {
+        if (state.search.isNotBlank()) {
+            isSearching = true
+            delay(400)
+            isSearching = false
+        }
+    }
+
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            isFindingNearest = true
+            nearestErrorMsg = null
+            nearestModalStation = null
+
+            scope.launch {
+                val startTime = System.currentTimeMillis()
+                var found: Pair<Station, MetroLine>? = null
+
+                runCatching {
+                    val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as android.location.LocationManager
+                    var loc: android.location.Location? = null
+                    val providers = locationManager.getProviders(true)
+                    for (provider in providers) {
+                        val l = locationManager.getLastKnownLocation(provider)
+                        if (l != null) {
+                            loc = l
+                            break
+                        }
+                    }
+
+                    // Fallback to Moscow center (Kremlin) if location is null (e.g. indoors without GPS fix)
+                    val latitude = loc?.latitude ?: 55.751244
+                    val longitude = loc?.longitude ?: 37.618423
+
+                    var closest: Station? = null
+                    var closestLine: MetroLine? = null
+                    var minDistance = Float.MAX_VALUE
+                    val results = FloatArray(1)
+                    for (line in state.lines) {
+                        for (st in line.stations) {
+                            android.location.Location.distanceBetween(latitude, longitude, st.lat, st.lon, results)
+                            val dist = results[0]
+                            if (dist < minDistance) {
+                                minDistance = dist
+                                closest = st
+                                closestLine = line
+                            }
+                        }
+                    }
+                    if (closest != null && closestLine != null) {
+                        found = closest to closestLine
+                    }
+                }
+
+                // Ensure at least 5 seconds of search animation
+                val elapsed = System.currentTimeMillis() - startTime
+                if (elapsed < 5000) {
+                    delay(5000 - elapsed)
+                }
+
+                isFindingNearest = false
+                if (found != null) {
+                    nearestModalStation = found
+                    showNearestDialog = true
+                } else {
+                    nearestErrorMsg = "Не удалось определить ближайшую станцию"
+                }
+            }
+        } else {
+            nearestErrorMsg = "Нет разрешения на геолокацию"
+        }
+    }
+
     val filteredLines = state.lines.filter { line ->
         state.search.isBlank() || line.name.contains(state.search, true) || line.stations.any { it.name.contains(state.search, true) }
     }
+
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(bottom = 28.dp),
@@ -179,30 +329,97 @@ private fun HomeScreen(
     ) {
         item { HomeHero(state) }
         item {
-            SearchBar(
-                query = state.search,
-                onQueryChange = onSearch,
-                onSearch = {},
-                active = false,
-                onActiveChange = {},
-                placeholder = { Text("Найти станцию или линию") },
-                leadingIcon = { Icon(Icons.Default.Search, null) },
-                trailingIcon = if (state.search.isNotBlank()) {{ IconButton({ onSearch("") }) { Icon(Icons.Default.Close, null) } }} else null,
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)
-            ) {}
-        }
-        item { FilterRow(state.filter, onFilter) }
-        item {
-            Row(Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("Линии метро", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Black)
-                Spacer(Modifier.weight(1f))
-                Text("${filteredLines.size}", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                SearchBar(
+                    query = state.search,
+                    onQueryChange = onSearch,
+                    onSearch = {},
+                    active = false,
+                    onActiveChange = {},
+                    placeholder = { Text("Найти станцию или линию") },
+                    leadingIcon = { Icon(Icons.Default.Search, null) },
+                    trailingIcon = if (state.search.isNotBlank()) {{ IconButton({ onSearch("") }) { Icon(Icons.Default.Close, null) } }} else null,
+                    modifier = Modifier.weight(1f)
+                ) {}
+
+                FilledTonalIconButton(
+                    onClick = { permissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION) },
+                    modifier = Modifier.size(54.dp),
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Icon(Icons.Default.MyLocation, "Ближайшая станция", tint = MaterialTheme.colorScheme.primary)
+                }
             }
         }
-        items(filteredLines, key = { it.id }) { line ->
-            LineCard(line, state.progress) { onLine(line) }
+        item { FilterRow(state.filter, onFilter) }
+
+        if (isSearching) {
+            item {
+                Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        CircularProgressIndicator(modifier = Modifier.size(32.dp), color = MaterialTheme.colorScheme.primary)
+                        Text("Ищем станции...", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
+        } else {
+            item {
+                Row(Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("Линии метро", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Black)
+                    Spacer(Modifier.weight(1f))
+                    Text("${filteredLines.size}", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+                }
+            }
+            items(filteredLines, key = { it.id }) { line ->
+                LineCard(line, state.progress) { onLine(line) }
+            }
+            if (filteredLines.isEmpty()) item { EmptyState("Ничего не найдено", "Попробуй изменить запрос") }
         }
-        if (filteredLines.isEmpty()) item { EmptyState("Ничего не найдено", "Попробуй изменить запрос") }
+    }
+
+    if (showNearestDialog && nearestModalStation != null) {
+        val (st, line) = nearestModalStation!!
+        AlertDialog(
+            onDismissRequest = { showNearestDialog = false },
+            icon = { Icon(Icons.Default.MyLocation, null, tint = MaterialTheme.colorScheme.primary) },
+            title = { Text("Ближайшая станция") },
+            text = { Text("К вам ближе всего станция «${st.name}» (${line.name}). Хотите открыть её?") },
+            confirmButton = {
+                TextButton({
+                    showNearestDialog = false
+                    onStationSelect(st, line)
+                }) { Text("Открыть") }
+            },
+            dismissButton = {
+                TextButton({ showNearestDialog = false }) { Text("Отмена") }
+            }
+        )
+    }
+
+    if (isFindingNearest) {
+        AlertDialog(
+            onDismissRequest = {},
+            icon = { CircularProgressIndicator(modifier = Modifier.size(36.dp), color = MaterialTheme.colorScheme.primary) },
+            title = { Text("Поиск ближайшей станции") },
+            text = { Text("Ищем ближайшую станцию метро... Пожалуйста, подождите (минимум 5 секунд).") },
+            confirmButton = {}
+        )
+    }
+
+    if (nearestErrorMsg != null) {
+        AlertDialog(
+            onDismissRequest = { nearestErrorMsg = null },
+            icon = { Icon(Icons.Default.Error, null, tint = MaterialTheme.colorScheme.error) },
+            title = { Text("Станция не нашлась") },
+            text = { Text(nearestErrorMsg!!) },
+            confirmButton = {
+                TextButton({ nearestErrorMsg = null }) { Text("OK") }
+            }
+        )
     }
 }
 
@@ -384,6 +601,7 @@ private fun LineSummary(line: MetroLine, progress: Map<String, StationProgress>)
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun StationTimelineRow(
     station: Station,
@@ -394,36 +612,114 @@ private fun StationTimelineRow(
     onOpen: () -> Unit,
     onToggle: () -> Unit
 ) {
-    Row(Modifier.fillMaxWidth().heightIn(min = 86.dp)) {
-        Box(Modifier.width(50.dp).fillMaxHeight(), contentAlignment = Alignment.Center) {
-            if (!first) Box(Modifier.width(4.dp).fillMaxHeight(.5f).align(Alignment.TopCenter).background(lineColor.copy(alpha = .5f)))
-            if (!last) Box(Modifier.width(4.dp).fillMaxHeight(.5f).align(Alignment.BottomCenter).background(lineColor.copy(alpha = .5f)))
-            Box(
-                Modifier.size(if (progress.visited) 34.dp else 24.dp)
-                    .background(if (progress.visited) lineColor else MaterialTheme.colorScheme.surface, CircleShape)
-                    .then(Modifier.padding(2.dp)),
-                contentAlignment = Alignment.Center
-            ) {
-                if (progress.visited) Icon(Icons.Default.Check, null, tint = Color.White, modifier = Modifier.size(19.dp))
-                else Box(Modifier.size(12.dp).background(lineColor, CircleShape))
-            }
+    val dismissState = rememberSwipeToDismissBoxState(
+        positionalThreshold = { it * 0.35f }
+    )
+
+    // Trigger toggle when swiped in either direction, then reset
+    LaunchedEffect(dismissState.currentValue) {
+        if (dismissState.currentValue != SwipeToDismissBoxValue.Settled) {
+            onToggle()
+            dismissState.snapTo(SwipeToDismissBoxValue.Settled)
         }
-        Card(
-            modifier = Modifier.weight(1f).padding(vertical = 6.dp),
-            onClick = onOpen,
-            shape = RoundedCornerShape(18.dp),
-            colors = CardDefaults.cardColors(containerColor = if (progress.visited) lineColor.copy(alpha = .10f) else MaterialTheme.colorScheme.surfaceContainer)
-        ) {
-            Row(Modifier.padding(15.dp), verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(station.name, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                        if (progress.favorite) { Spacer(Modifier.width(6.dp)); Icon(Icons.Default.Star, null, tint = Color(0xFFFFB300), modifier = Modifier.size(17.dp)) }
+    }
+
+    SwipeToDismissBox(
+        state = dismissState,
+        backgroundContent = {
+            val direction = dismissState.dismissDirection
+            val isStart = direction == SwipeToDismissBoxValue.StartToEnd
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .padding(vertical = 6.dp, horizontal = 4.dp)
+                    .clip(RoundedCornerShape(18.dp))
+                    .background(
+                        if (progress.visited) MaterialTheme.colorScheme.errorContainer
+                        else lineColor.copy(alpha = .2f)
+                    ),
+                contentAlignment = if (isStart) Alignment.CenterStart else Alignment.CenterEnd
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 20.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    val icon = if (progress.visited) Icons.Default.Close else Icons.Default.Check
+                    val label = if (progress.visited) "Снять" else "Посещено"
+                    val tint = if (progress.visited) MaterialTheme.colorScheme.onErrorContainer else lineColor
+                    if (isStart) {
+                        Icon(icon, null, tint = tint)
+                        Text(label, fontWeight = FontWeight.Bold, color = tint)
+                    } else {
+                        Text(label, fontWeight = FontWeight.Bold, color = tint)
+                        Icon(icon, null, tint = tint)
                     }
-                    Text("Открыта в ${station.openingYear}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                IconButton(onToggle) {
-                    Icon(if (progress.visited) Icons.Default.CheckCircle else Icons.Default.RadioButtonUnchecked, "Посещение", tint = lineColor)
+            }
+        },
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(Modifier.fillMaxWidth().heightIn(min = 86.dp)) {
+            Box(Modifier.width(50.dp).fillMaxHeight(), contentAlignment = Alignment.Center) {
+                if (!first) Box(Modifier.width(4.dp).fillMaxHeight(.5f).align(Alignment.TopCenter).background(lineColor.copy(alpha = .5f)))
+                if (!last) Box(Modifier.width(4.dp).fillMaxHeight(.5f).align(Alignment.BottomCenter).background(lineColor.copy(alpha = .5f)))
+                Box(
+                    Modifier
+                        .size(if (progress.visited) 34.dp else 24.dp)
+                        .background(if (progress.visited) lineColor else MaterialTheme.colorScheme.surface, CircleShape)
+                        .padding(2.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (progress.visited) Icon(Icons.Default.Check, null, tint = Color.White, modifier = Modifier.size(19.dp))
+                    else Box(Modifier.size(12.dp).background(lineColor, CircleShape))
+                }
+            }
+            Card(
+                modifier = Modifier.weight(1f).padding(vertical = 6.dp),
+                onClick = onOpen,
+                shape = RoundedCornerShape(18.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceContainer
+                )
+            ) {
+                Row(
+                    Modifier.padding(16.dp).fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                station.name,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f, fill = false)
+                            )
+                            if (progress.favorite) {
+                                Spacer(Modifier.width(6.dp))
+                                Icon(Icons.Default.Star, null, tint = Color(0xFFFFB300), modifier = Modifier.size(17.dp))
+                            }
+                        }
+                        Spacer(Modifier.height(3.dp))
+                        Text(
+                            "Открыта в ${station.openingYear}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    IconButton(
+                        onClick = onToggle,
+                        modifier = Modifier.size(40.dp)
+                    ) {
+                        Icon(
+                            if (progress.visited) Icons.Default.CheckCircle else Icons.Default.RadioButtonUnchecked,
+                            "Посещение",
+                            tint = lineColor
+                        )
+                    }
                 }
             }
         }
@@ -533,8 +829,24 @@ private fun InfoTile(icon: androidx.compose.ui.graphics.vector.ImageVector, titl
 private fun StatisticsScreen(state: MetroUiState, onLine: (MetroLine) -> Unit) {
     val fraction = state.visitedCount.toFloat() / state.totalCount.coerceAtLeast(1)
     val completedLines = state.lines.count { line -> line.stations.all { state.progress[it.id]?.visited == true } }
+    var showShare by remember { mutableStateOf(false) }
+
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp, 20.dp, 16.dp, 30.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        item { ScreenHeader("Статистика", "Твой личный дневник метро") }
+        item {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    ScreenHeader("Статистика", "Твой личный дневник метро")
+                }
+                FilledTonalButton(
+                    onClick = { showShare = true },
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Icon(Icons.Default.Share, null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Поделиться")
+                }
+            }
+        }
         item {
             Card(shape = RoundedCornerShape(30.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primary)) {
                 Row(Modifier.fillMaxWidth().padding(22.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -571,6 +883,9 @@ private fun StatisticsScreen(state: MetroUiState, onLine: (MetroLine) -> Unit) {
         items(state.lines.sortedByDescending { line -> line.stations.count { state.progress[it.id]?.visited == true }.toFloat() / line.stations.size }, key = { it.id }) { line ->
             LineProgressRow(line, state.progress) { onLine(line) }
         }
+    }
+    if (showShare) {
+        ShareProgressDialog(state) { showShare = false }
     }
 }
 
@@ -610,6 +925,8 @@ private fun LineProgressRow(line: MetroLine, progress: Map<String, StationProgre
         Spacer(Modifier.width(12.dp)); Text("$visited/${line.stations.size}", fontWeight = FontWeight.Bold)
     }
 }
+
+
 
 @Composable
 private fun TrainsScreen() {
@@ -683,6 +1000,8 @@ private fun SettingsScreen(state: MetroUiState, vm: MetroViewModel) {
         item {
             SettingsCard {
                 SwitchSetting("Подтверждать снятие отметки", "Защищает от случайного нажатия", state.settings.confirmUnvisit) { value -> vm.updateSettings { it.copy(confirmUnvisit = value) } }
+                HorizontalDivider()
+                SwitchSetting("Еженедельное напоминание", "Push-уведомление раз в неделю о прогрессе", state.settings.weeklyReminder) { value -> vm.updateSettings { it.copy(weeklyReminder = value) } }
                 HorizontalDivider()
                 SettingsAction(Icons.Default.FileUpload, "Экспорт прогресса", "Сохранить резервную копию") { exportLauncher.launch("metro-moscow-backup.json") }
                 SettingsAction(Icons.Default.FileDownload, "Импорт прогресса", "Восстановить резервную копию") { importLauncher.launch(arrayOf("application/json", "text/plain")) }
@@ -764,3 +1083,110 @@ private fun EmptyState(title: String, subtitle: String) {
 private fun formatDate(raw: String): String = runCatching {
     LocalDate.parse(raw).format(DateTimeFormatter.ofPattern("dd.MM.yyyy"))
 }.getOrDefault(raw)
+
+@Composable
+private fun HistoryScreen(state: MetroUiState, onStation: (Station, MetroLine) -> Unit) {
+    val visitedStations = state.lines.flatMap { line ->
+        line.stations.filter { station -> state.progress[station.id]?.visited == true }
+            .map { station -> station to line }
+    }.sortedByDescending { (station, _) ->
+        state.progress[station.id]?.visitedAt ?: ""
+    }
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp, 20.dp, 16.dp, 36.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        item { ScreenHeader("История поездок", "Хронология посещённых станций") }
+        items(visitedStations, key = { (station, _) -> station.id }) { (station, line) ->
+            val p = state.progress[station.id] ?: StationProgress()
+            Card(
+                onClick = { onStation(station, line) },
+                shape = RoundedCornerShape(20.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)
+            ) {
+                Row(
+                    Modifier.padding(16.dp).fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        Modifier.size(44.dp).background(line.composeColor, CircleShape),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(line.number, color = Color.White, fontWeight = FontWeight.Black, fontSize = 14.sp)
+                    }
+                    Spacer(Modifier.width(14.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(station.name, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                        Spacer(Modifier.height(2.dp))
+                        Text("Линия: ${line.name}", style = MaterialTheme.typography.bodySmall, color = line.composeColor)
+                        if (!p.visitedAt.isNullOrBlank()) {
+                            Text("Дата: ${formatDate(p.visitedAt)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        if (p.note.isNotBlank()) {
+                            Spacer(Modifier.height(4.dp))
+                            Text("«${p.note}»", style = MaterialTheme.typography.bodySmall, fontStyle = androidx.compose.ui.text.font.FontStyle.Italic, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                    if (p.favorite) {
+                        Icon(Icons.Default.Star, null, tint = Color(0xFFFFB300), modifier = Modifier.size(20.dp))
+                    }
+                }
+            }
+        }
+        if (visitedStations.isEmpty()) {
+            item {
+                EmptyState("История пуста", "Отмечай посещённые станции, и они появятся здесь")
+            }
+        }
+    }
+}
+
+@Composable
+private fun ShareProgressDialog(state: MetroUiState, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val visited = state.visitedCount
+    val total = state.totalCount
+    val percent = if (total > 0) ((visited.toFloat() / total) * 100).roundToInt() else 0
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Мой прогресс в метро") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                Box(
+                    Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.primaryContainer, RoundedCornerShape(20.dp)).padding(20.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text("🚇 Метро Москвы", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                        Text("$visited из $total станций", fontSize = 24.sp, fontWeight = FontWeight.Black, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                        Text("Пройдено: $percent%", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                    }
+                }
+                Text("Поделись своими достижениями с друзьями!", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        },
+        confirmButton = {
+            Button(onClick = {
+                val sendIntent = android.content.Intent().apply {
+                    action = android.content.Intent.ACTION_SEND
+                    putExtra(android.content.Intent.EXTRA_TEXT, "🚇 Мой прогресс в приложении «Метро Москвы»: посещено $visited из $total станций ($percent%). Открываю город станция за станцией!")
+                    type = "text/plain"
+                }
+                context.startActivity(android.content.Intent.createChooser(sendIntent, "Поделиться прогрессом"))
+                onDismiss()
+            }) {
+                Icon(Icons.Default.Share, null)
+                Spacer(Modifier.width(8.dp))
+                Text("Поделиться")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Закрыть") }
+        }
+    )
+}
+
+

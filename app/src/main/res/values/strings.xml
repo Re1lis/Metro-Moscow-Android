@@ -1,3 +1,4 @@
 <resources>
     <string name="app_name">Метро Москвы</string>
+    <string name="widget_description">Прогресс посещения станций Московского метро</string>
 </resources>

@@ -18,7 +18,9 @@ data class Station(
     val id: String,
     val name: String,
     val openingYear: Int,
-    val depth: String?
+    val depth: String?,
+    val lat: Double = 55.751244,
+    val lon: Double = 37.618423
 )
 
 data class StationProgress(
@@ -42,7 +44,9 @@ data class UserSettings(
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
     val accentIndex: Int = 0,
     val reduceMotion: Boolean = false,
-    val confirmUnvisit: Boolean = true
+    val confirmUnvisit: Boolean = true,
+    val weeklyReminder: Boolean = false,
+    val appIcon: Int = 0
 )
 
 enum class StationFilter { ALL, VISITED, UNVISITED, FAVORITES }

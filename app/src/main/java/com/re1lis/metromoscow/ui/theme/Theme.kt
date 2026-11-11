@@ -22,6 +22,23 @@ val MetroOrange = Color(0xFFE76F00)
 
 val AccentColors = listOf(MetroRed, MetroBlue, MetroGreen, MetroPurple, MetroOrange)
 
+/** Базовые цветовые схемы — используются виджетом (Glance) */
+val LightColorScheme = lightColorScheme(
+    primary = MetroRed,
+    secondary = MetroRed.copy(alpha = .85f),
+    surface = Color(0xFFFFFBFF),
+    surfaceContainer = Color(0xFFF3F0F4),
+    background = Color(0xFFF9F7FA)
+)
+
+val DarkColorScheme = darkColorScheme(
+    primary = MetroRed,
+    secondary = MetroRed.copy(alpha = .85f),
+    surface = Color(0xFF15171B),
+    surfaceContainer = Color(0xFF202329),
+    background = Color(0xFF101216)
+)
+
 @Composable
 fun MetroTheme(settings: UserSettings, content: @Composable () -> Unit) {
     val dark = when (settings.themeMode) {

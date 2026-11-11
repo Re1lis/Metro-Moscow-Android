@@ -40,7 +40,9 @@ class MetroRepository(context: Context) {
         }.getOrDefault(ThemeMode.SYSTEM),
         accentIndex = prefs.getInt("accent", 0),
         reduceMotion = prefs.getBoolean("reduce_motion", false),
-        confirmUnvisit = prefs.getBoolean("confirm_unvisit", true)
+        confirmUnvisit = prefs.getBoolean("confirm_unvisit", true),
+        weeklyReminder = prefs.getBoolean("weekly_reminder", false),
+        appIcon = prefs.getInt("app_icon", 0)
     )
 
     fun saveSettings(settings: UserSettings) {
@@ -49,6 +51,8 @@ class MetroRepository(context: Context) {
             .putInt("accent", settings.accentIndex)
             .putBoolean("reduce_motion", settings.reduceMotion)
             .putBoolean("confirm_unvisit", settings.confirmUnvisit)
+            .putBoolean("weekly_reminder", settings.weeklyReminder)
+            .putInt("app_icon", settings.appIcon)
             .apply()
     }
 
@@ -95,7 +99,8 @@ class MetroRepository(context: Context) {
             themeMode = runCatching { ThemeMode.valueOf(s.optString("theme")) }.getOrDefault(ThemeMode.SYSTEM),
             accentIndex = s.optInt("accent").coerceIn(0, 4),
             reduceMotion = s.optBoolean("reduceMotion"),
-            confirmUnvisit = s.optBoolean("confirmUnvisit", true)
+            confirmUnvisit = s.optBoolean("confirmUnvisit", true),
+            weeklyReminder = s.optBoolean("weeklyReminder", false)
         )
         saveProgress(progress)
         saveSettings(settings)
